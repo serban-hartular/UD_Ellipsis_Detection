@@ -89,7 +89,7 @@ variables = ['is_cataphoric', 'cl_distance', 'node_id',
 
 
 dl = tp.DocList.from_conllu('./cancan21-annot-2.4-vpe.conllu')
-client = RoBERT_Client()
+client = RoBERT_Client(timeout=20)
 
 for doc in dl:
     vpe = [m.node for m in doc.search('.//[misc.Target=unknown]')]
@@ -97,12 +97,23 @@ for doc in dl:
         continue
     for licenser in vpe:
         candidates = get_antecedent_candidates(licenser, doc, client)
+        if not candidates:
+            print('Error generating candidates for licenser %s' % doc.uid(licenser))
+            licenser.remove('misc.TargetID')
+            licenser.assign('misc.Guess', {'Yes'})
+            continue
         candidate_uids = [r['antec'] for r in candidates]
         df = pd.DataFrame(candidates)
         X = df[variables]
         y = classifier.predict_proba(X)
         results = list(zip(candidate_uids, [p[1] for p in y]))
+        # let's the items with probability >0.995
+        certains = [t for t in results if t[1] > 0.995]
         results.sort(key=lambda t: -t[1])
-        print(results[0])
+        pick = certains[-1] if certains else results[0]
+        print(str(pick) + '\t' + str(results))
+        licenser.assign('misc.TargetID', {pick[0]})
+        licenser.assign('misc.Guess', {'Yes'})
+
 
 

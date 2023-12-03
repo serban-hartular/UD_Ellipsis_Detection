@@ -27,20 +27,58 @@ def node_wvector_dict(doc : tp.ParsedDoc, client : RoBERT_Client) -> Dict[str, L
         vector_dict.update({doc.uid(_n) : vec for _n, vec in node_vectors})
     return vector_dict
 
-dl = tp.DocList.from_conllu('./cancan21-annot-2.2-vpe.conllu')
-client = RoBERT_Client()
-BEFORE = 5
-AFTER = 3
 
 is_subj_imperative = tp.Search('.[feats.Mood=Imp | /[upos=PART lemma=să] ]')
 is_rel = tp.Search('<[(feats.PronType=Rel !lemma=care) | /[feats.PronType=Rel !lemma=care] ]')
 
 mod_class_dict = defaultdict(int, {'ParaEpist':1, 'ParaDeont' : 2})
 
+class AntecedentDataGenerator:
+    def generate_instance_datapoints(self) -> List[List[float|str]]:
+        text_candidate_cl = clause_to_sentence_text(candidate_clause)
+        for i, candidate in enumerate(candidate_clause):
+            if candidate == licenser:
+                is_cataphoric = True
+                continue
+            if not is_verb.find(candidate): continue  # not verb
+            delta = candidate_clause_index - licenser_index
+            row = {'antec': doc.uid(candidate),
+                   'licenser': doc.uid(licenser),
+                   'is_cataphoric': is_cataphoric,
+                   'cl_distance': abs(delta),
+                   'node_id': int(candidate.sdata('id')) / 100 * (-1 if is_cataphoric else 1)
+                   }
+            # next sentence probability
+            text1, text2 = (text_ellipsis_cl, text_candidate_cl) if is_cataphoric else (
+            text_candidate_cl, text_ellipsis_cl)
+            nsp_score = client.get_next_sentence_probability(text1, text2)
+            row['nsp_score'] = nsp_score
+            # modalities
+            candidate_parent = candidate.parent
+            if candidate_parent is None:
+                candidate_modality = ('', '')
+            else:
+                candidate_modality = modality_ml_test.get_labels_from_word_vec(vector_dict[doc.uid(candidate)],
+                                                                               modality_detector)
+            row['same_mod'] = licenser_modality[0] == candidate_modality[0]
+            row['same_mod_class'] = licenser_modality[1] == candidate_modality[1]
+            row['l_mod_class'] = mod_class_dict[licenser_modality[1]]
+            row['subj_imperat'] = bool(is_subj_imperative.find(candidate))
+            row['is_rel'] = bool(is_rel.find(candidate))
+            # result
+            row['y'] = bool(candidate == antecedent)
+            # to float
+            row = {k: (v if isinstance(v, str) else float(v)) for k, v in row.items()}
+
 
 if __name__ == '__main__':
     data = []
     labels = set()
+
+    dl = tp.DocList.from_conllu('./cancan21-annot-2.2-vpe.conllu')
+    client = RoBERT_Client()
+    BEFORE = 5
+    AFTER = 3
 
     for doc in dl:
         vpe = [m.node for m in doc.search('.//[misc.Ellipsis=VPE misc.Antecedent=Present]')]
